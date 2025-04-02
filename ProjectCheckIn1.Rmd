@@ -1,0 +1,150 @@
+---
+title: "Project Check in 1"
+output: pdf_document
+date: "2024-10-03"
+---
+
+Below you will find the template for Project Check in 1. Each group member should submit a project check in document. Work with your team to ensure you limit duplicated work. The example code below is instructional and should not appear in your submission. Please do feel free to adapt it to your own dataset. 
+
+1. ***If your dataset has changed*** from what you submitted for Project Check in 0, please record: 
+
+- number of observations (rows)
+- number of variables (columns)
+- number of missing values
+- names of particular columns of interest (if there are too many to print all of them!)
+- data source and links to any accompanying documentation 
+
+```{r}
+library(readr)
+dl_data <- read.csv("dat/Game_Logs_Defensive_Lineman.csv")
+nrow(dl_data)
+ncol(dl_data)
+colnames(dl_data)
+dl_data$Sacks <- as.numeric(dl_data$Sacks)
+dl_data$Total.Tackles <- as.numeric(dl_data$Total.Tackles)
+```
+
+Fisher, R. A. (1936) The use of multiple measurements in taxonomic problems. Annals of Eugenics, 7, Part II, 179–188. [doi:10.1111/j.1469-1809.1936.tb02137.x](doi:10.1111/j.1469-1809.1936.tb02137.x).
+
+
+2. Show summary statistics for the five variables of the most interest. 
+
+```{r}
+summary(dl_data[, c("Total.Tackles", "Sacks", "Forced.Fumbles", "Games.Played", "Position")])
+```
+
+3. Show another set of summary statistics by filtering on a column of interest. This could be years, teams, genres. Dig a little deeper here! Think about what might have a different distribution!  
+
+```{r}
+class(dl_data$Total.Tackles)  # Check if numeric
+
+dl_data$Total.Tackles <- as.numeric(gsub(",", "", dl_data$Total.Tackles))
+
+dl_data$Total.Tackles <- as.numeric(dl_data$Total.Tackles)  # Convert directly
+
+class(dl_data$Total.Tackles)  # Should now say "numeric"
+summary(dl_data$Total.Tackles)  # Check for NA values
+
+aggregate(Total.Tackles ~ Home.or.Away, data = dl_data, FUN = mean, na.rm = TRUE)
+```
+
+
+4. Visualize the distribution of at least three variables. For example, below I've made a histogram to investigate the distribution of Petal Length. I've colored them by species. This is the base R way. You'll notice that we've had to be clever about how we set the x-axis here, it has to encompass the full range of Petal.Length.
+
+I expect plots to have sensible, nice-looking labels.
+
+```{r}
+dl_data$'Solo Tackles' <- as.numeric(dl_data$'Solo Tackles')
+dl_data$'Sacks' <- as.numeric(dl_data$'Sacks')
+dl_data$'Forced Fumbles' <- as.numeric(dl_data$'Forced Fumbles')
+
+par(mfrow = c(1, 3))
+
+h1 <- hist(dl_data$'Solo Tackles', 
+           breaks = 10, 
+           main = "Solo Tackles", 
+           xlab = "Solo Tackles", 
+           col = "lightblue", 
+           border = "black",
+           xlim = c(0, 10), 
+           ylim = c(0, 40000))
+
+h2 <- hist(dl_data$'Sacks', 
+           breaks = 10, 
+           main = "Sacks", 
+           xlab = "Sacks", 
+           col = "lightgreen", 
+           border = "black",
+           xlim = c(0, 3), 
+           ylim = c(0, 30000))
+
+h3 <- hist(dl_data$'Forced Fumbles', 
+           breaks = 10, 
+           main = "Forced Fumbles", 
+           xlab = "Forced Fumbles", 
+           col = "lightcoral", 
+           border = "black",
+           xlim = c(0, 3), 
+           ylim = c(0, 50000))
+
+par(mfrow = c(1, 1))
+
+plot(h1)
+plot(h2)
+plot(h3)
+```
+Where appropriate, this can be a series of boxplots, for ex: 
+
+```{r}
+combined_data <- list(
+  "Solo Tackles" = dl_data$'Solo Tackles',
+  "Sacks" = dl_data$'Sacks',
+  "Forced Fumbles" = dl_data$'Forced Fumbles'
+)
+
+# Plot the boxplot for the combined data
+boxplot(combined_data, 
+        main = "Defensive Play Distribution", 
+        xlab = "Defensive Plays", 
+        ylab = "Frequency", 
+        col = c("lightblue", "lightgreen", "lightcoral"), 
+        border = "black",
+        ylim = c(0,3))
+```
+
+```
+
+
+3. Show three scatterplots that show the relationship between variables. Coloring data is a useful dimension to add here! There are [many](https://github.com/karthik/wesanderson) [different](https://www.datanovia.com/en/blog/top-r-color-palettes-to-know-for-great-data-visualization/#viridis-color-palettes) [ways](https://www.nceas.ucsb.edu/sites/default/files/2020-04/colorPaletteCheatsheet.pdf) to generate color palettes in R, but the general process here is the same: 
+
+- define color palette, here my_colors (or pick your own hex codes or a fancy color brewer package)
+- map the variable to the variables. We've done this using fields::color.scale() in class. Or get fancy with for loops and overplotting 
+- generate plot! 
+
+
+Extremely optional: You can turn your points into emojis with the [emojifont package](https://cran.r-project.org/web/packages/emojifont/vignettes/emojifont.html)
+
+```{r}
+# Define colors for teams
+team_colors <- rainbow(length(unique(dl_data$Team)))
+names(team_colors) <- unique(dl_data$Team)
+
+plot(dl_data$Total.Tackles, dl_data$Sacks, 
+     col = team_colors[dl_data$Team], pch = 19,
+     xlab = "Tackles", ylab = "Sacks",
+     main = "Tackles vs. Sacks by Team")
+legend("topright", legend = names(team_colors), 
+       fill = team_colors, cex = 0.6)
+
+plot(dl_data$Sacks, dl_data$Forced.Fumbles, 
+     col = team_colors[dl_data$Team], pch = 19,
+     xlab = "Sacks", ylab = "Forced Fumbles",
+     main = "Sacks vs. Forced Fumbles by Team")
+
+plot(dl_data$Games.Played, dl_data$Total.Tackles, 
+     col = "purple", pch = 19,
+     xlab = "Games Played", ylab = "Tackles",
+     main = "Tackles vs. Games Played")
+```
+
+4. Write a few sentences about the observations you see in the above plots. Provide any context where necessary. 
