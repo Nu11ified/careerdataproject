@@ -18,14 +18,20 @@ Below you will find the template for Project Check in 1. Each group member shoul
 ```{r}
 library(readr)
 dline_stats <- read_csv("Data/Game_Logs_Defensive_Lineman.csv")
-nrow(dline_stats)
-ncol(dline_stats)
-colnames(dline_stats)
+
 dline_stats$Sacks <- as.numeric(dline_stats$Sacks)
 dline_stats$`Total Tackles` <- as.numeric(dline_stats$`Total Tackles`)
 
-#remove NAs
+dline_stats$Sacks[is.na(dline_stats$Sacks)] <- 0
+dline_stats$`Total Tackles`[is.na(dline_stats$`Total Tackles`)] <- 0
 
+nrow(dline_stats)
+ncol(dline_stats)
+colnames(dline_stats)
+
+# Verify that NAs are gone
+print(paste("NAs remaining in Sacks:", sum(is.na(dline_stats$Sacks))))
+print(paste("NAs remaining in Total Tackles:", sum(is.na(dline_stats$`Total Tackles`))))
 ```
 
 Fisher, R. A. (1936) The use of multiple measurements in taxonomic problems. Annals of Eugenics, 7, Part II, 179–188. [doi:10.1111/j.1469-1809.1936.tb02137.x](doi:10.1111/j.1469-1809.1936.tb02137.x).
@@ -161,6 +167,39 @@ points(dline_stats$'Solo Tackles', dline_stats$'Forced Fumbles',
 points(dline_stats$'Sacks', dline_stats$'Forced Fumbles', 
        col = forced_fumbles_colors, pch = 19)
 ```
+
+```{r}
+library(tidyverse)
+
+ 
+
+games <- data.frame(
+    year = sample(2018:2022,100,   replace = TRUE),
+    week = sample(1:17,  100, replace = TRUE),
+    result = sample(c("win", "loss"), 100, replace = TRUE)
+  )
+
+ 
+
+# Count wins per year
+
+wins_per_year <- games %>%
+  filter(result == "win") %>%
+  group_by(year) %>%
+  summarise(wins = n()) %>%
+  ungroup()
+
+ 
+
+# Plot wins by year
+ggplot(wins_per_year, aes(x = factor(year), y = wins)) +
+  geom_col(fill = "darkgreen") +
+  labs(title = "Simulated Wins per Year (from mtcars)",
+       x = "Year",
+       y = "Number of Wins") +
+  theme_minimal()
+```
+
 
 4. Write a few sentences about the observations you see in the above plots. Provide any context where necessary. 
 
