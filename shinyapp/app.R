@@ -7,7 +7,7 @@ library(DT)
 ui <- fluidPage(
   theme = shinythemes::shinytheme("flatly"), 
   
-  titlePanel("Enhanced Interactive Game Simulation Analysis"),
+  titlePanel("Game Simulation Analysis"),
   
   sidebarLayout(
     sidebarPanel(
