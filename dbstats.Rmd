@@ -1,0 +1,245 @@
+---
+title: "NFL Quarterback Stats"
+output: pdf_document
+date: "2025-12-05"
+author: "Cooper C, Manas R, Mark B, Elijah R"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+```{r data_wrangling }
+#Reading In Data
+library(readr)
+library(tidyverse)
+library(dplyr)
+library(glmnet)
+library(tidyr)
+library(ggplot2)
+Quarterback <- read_csv("Data/Game_Logs_Quarterback.csv")
+
+#Data Wrangling
+Quarterback$Position <- "QB"
+for (i in 12:ncol(Quarterback)){
+Quarterback[[i]] <- as.numeric(Quarterback[[i]])
+Quarterback[[i]][is.na(Quarterback[[i]])] <- 0
+}
+
+Starter <- Quarterback[Quarterback$`Games Started` == "1",]
+
+Starter %>%
+  group_by(Name) %>%
+  summarise(
+    `Games Started` = sum(`Games Started`),
+    Wins = sum(Outcome == "W"),
+    Losses = sum(Outcome == "L"),
+    `Completion Percentage` = mean(`Completion Percentage`),
+    PassingYards = mean(`Passing Yards`),
+    `Rushing Yards` = mean(`Rushing Yards`),
+    PasserRating = mean(`Passer Rating`),
+    `TD Passes` = mean(`TD Passes`),
+    `Rushing TDs` = mean(`Rushing TDs`),
+    Ints = mean(Ints),
+    Sacks = mean(Sacks),
+    Fumbles = mean(Fumbles)) -> new_df
+
+new_df$Win_Percentage <- new_df$Wins / new_df$`Games Started`
+
+#head(new_df)
+#colnames(new_df)
+```
+
+# Abstract 
+This report analyzes historical NFL quarterback game log data to identify statistical performance indicators that correlate with and predict player win percentage. Quarterback performance is widely considered crucial to NFL team success, and understanding the specific metrics that contribute most significantly to winning can provide valuable insights. Key statistics, particularly *Passer Rating, Completion Percentage, and Touchdown Passes*, show strong positive correlations with win percentage, while interceptions show a negative correlation. Statistics like *rushing* show weaker relationships. Predictive models (Lasso and Stepwise Regression) were developed using these stats. The models achieved moderate predictive power (Test R-squared approx. 0.34-0.37), suggesting that while individual quarterback performance stats are important, other factors (team quality, defense, opponent strength) also significantly influence game outcomes. Passer Rating consistently emerges as a highly influential predictor.
+
+
+
+```{r histogram}
+columns_to_plot <- c('PassingYards', 'Rushing Yards', 'PasserRating')
+
+ncol <- 2  
+nrow <- ceiling(length(columns_to_plot) / ncol)
+par(mfrow = c(nrow, ncol), mar = c(3, 3, 1, 2)) 
+
+for (col_name in columns_to_plot) {
+  hist(new_df[[col_name]], 
+       main = paste("Distribution of", col_name), 
+       xlab = col_name, 
+       col = "lightblue", 
+       border = "black")
+}
+```
+
+```{r box_plot}
+new_df$WinsGroup <- cut(new_df$Wins,
+                        breaks = 5,
+                        labels = c("0–45", "46–90", "91–136", "137–181", "182–226"))
+
+# Plot bar chart
+ggplot(new_df, aes(x = WinsGroup, y = PassingYards)) +
+  geom_boxplot(fill = "lightblue") + 
+  labs(x = "Total Wins",
+       y = "Average Passing Yards (Per Game)",
+       title = "Average Passing Yards Grouped By Career Wins") +
+  theme_minimal()
+```
+
+
+```{r bar_chart}
+predictor_columns <- c('Completion Percentage', 'PassingYards', 'Rushing Yards', 'PasserRating', 'TD Passes', 'Rushing TDs', 'Ints', 'Sacks', 'Fumbles')
+correlation_results <- list()
+
+for (col_name in predictor_columns) {
+  correlation_value <- cor(new_df[[col_name]], new_df$Win_Percentage)
+  correlation_results[[col_name]] <- correlation_value
+}
+
+correlations_vector <- unlist(correlation_results)
+
+sorted_correlations <- correlations_vector[order(-abs(correlations_vector))]
+
+par(mar = c(5, 8, 4, 2) + 0.1) 
+barplot(sorted_correlations, 
+        main = "How Strongly Each Stat Relates to Win Percentage", 
+        xlab = "Correlation Coefficient",
+        horiz = TRUE, 
+        las = 1, 
+        cex.names = 0.8, 
+        col = "lightblue"
+       )
+
+par(mar = c(5, 4, 4, 2) + 0.1) 
+```
+
+
+```{r lasso_model}
+y <- new_df$Win_Percentage
+
+x <- data.matrix(new_df[, c('Completion Percentage', 'PassingYards', 'Rushing Yards', 'PasserRating', 'TD Passes', 'Rushing TDs', 'Ints', 'Sacks', 'Fumbles')])
+
+set.seed(123) 
+train_indices <- sample(1:nrow(x), 0.7 * nrow(x)) 
+
+x_train <- x[train_indices, ]
+x_test <- x[-train_indices, ]
+y_train <- y[train_indices]
+y_test <- y[-train_indices]
+
+#find optimal lambda value
+cv_model <- cv.glmnet(x_train, y_train, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- cv_model$lambda.min
+#print(best_lambda)
+
+#plot of test MSE
+#plot(cv_model)
+
+#glmnet the model
+best_model <- glmnet(x_train, y_train, alpha = 1, lambda = best_lambda)
+
+# Display coefficients
+#print(coef(best_model))
+
+# Make predictions on the test set
+y_pred <- predict(best_model, s = best_lambda, newx = x_test)
+
+# Calculate R-squared on the test set
+sst_lasso_test <- sum((y_test - mean(y_test))^2)
+sse_lasso_test <- sum((y_pred - y_test)^2)
+rsq_lasso_test <- 1 - sse_lasso_test / sst_lasso_test
+
+#print(rsq_lasso_test)
+
+# Make predictions on the train set
+y_pred_train <- predict(best_model, s = best_lambda, newx = x_train)
+
+# Calculate R-squared on the train set
+sst_lasso_train <- sum((y_train - mean(y_train))^2)
+sse_lasso_train <- sum((y_pred_train - y_train)^2)
+rsq_lasso_train <- 1 - sse_lasso_train / sst_lasso_train
+
+#print(rsq_lasso_train)
+```
+
+```{r lasso_coef_table, results='asis', echo=FALSE}
+lasso_coeffs <- as.matrix(coef(best_model))
+colnames(lasso_coeffs) <- "Coefficient"
+
+knitr::kable(lasso_coeffs, caption = "Lasso Model Coefficients (Optimal Lambda)", digits = 4)
+```
+
+```{r lasso_graph, echo=FALSE}
+lasso_train_model <- glmnet(x_train, y_train, alpha = 1)
+
+par(mar = c(5, 4, 6, 2))
+
+plot(lasso_train_model, xvar = "lambda", label = TRUE, 
+     xlab = "Log Lambda",
+     ylab = "Dataset Coefficients",
+     main = "Lasso Coefficient Paths")
+
+# Add legend
+# Get predictor names (excluding intercept if present)
+lasso_coef_names <- rownames(coef(lasso_train_model))[-1]
+predictor_names <- colnames(x_train) # Use original column names for legend
+num_predictors <- length(predictor_names)
+plot_colors <- palette.colors(n = num_predictors, palette = "Set1") # More distinct colors
+
+# Dynamically place legend based on plot region
+usr <- par("usr")
+legend(x = usr[2]*0.6, y = usr[4],
+        legend = predictor_names, 
+        col = plot_colors, 
+        lty = 1, 
+        cex = 0.6, 
+        xpd = TRUE, # Allow legend to extend outside plot area if needed
+        bty = "n"  # No box around legend
+        )
+```
+
+```{r stepwise_model, echo=FALSE}
+train_data <- data.frame(y_train, x_train)
+colnames(train_data)[1] <- "Win_Percentage" 
+
+full_model <- lm(Win_Percentage ~ ., data = train_data)
+
+stepwise_model <- step(full_model, direction = "both", trace = 0) 
+
+#summary(stepwise_model)
+
+test_data <- data.frame(y_test, x_test)
+colnames(test_data)[1] <- "Win_Percentage"
+
+y_pred_stepwise <- predict(stepwise_model, newdata = test_data)
+
+sst_stepwise_test <- sum((y_test - mean(y_test))^2)
+sse_stepwise_test <- sum((y_pred_stepwise - y_test)^2)
+rsq_stepwise_test <- 1 - sse_stepwise_test / sst_stepwise_test
+#print(rsq_stepwise_test)
+
+y_pred_stepwise_train <- predict(stepwise_model, newdata = train_data)
+
+sst_stepwise_train <- sum((y_train - mean(y_train))^2)
+sse_stepwise_train <- sum((y_pred_stepwise_train - y_train)^2)
+rsq_stepwise_train <- 1 - sse_stepwise_train / sst_stepwise_train
+#print(rsq_stepwise_train)
+```
+
+```{r stepwise_summary_table, results='asis', echo=FALSE}
+stepwise_summary <- summary(stepwise_model)$coefficients
+
+knitr::kable(stepwise_summary, caption = "Stepwise Regression Model Summary", digits = 4)
+```
+
+```{r rsquared_comparison_table, results='asis', echo=FALSE}
+# Create data frame for R-squared comparison
+rsq_comparison_data <- data.frame(
+  Model = c("Lasso", "Lasso", "Stepwise", "Stepwise"),
+  DataSet = c("Train", "Test", "Train", "Test"),
+  R_Squared = c(rsq_lasso_train, rsq_lasso_test, rsq_stepwise_train, rsq_stepwise_test)
+)
+
+knitr::kable(rsq_comparison_data, caption = "Model R-squared Comparison", digits = 4, col.names = c("Model", "Data Set", "R-squared"))
+```

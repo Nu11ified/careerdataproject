@@ -1,0 +1,398 @@
+---
+title: "NFL Quarterback Stats: Identifying Key Predictors of Win Percentage"
+output: 
+  pdf_document:
+    toc: true
+    number_sections: true
+date: "2025-12-05" # Or use Sys.Date() for current date
+author: "Cooper C, Manas R, Mark B, Elijah R"
+---
+
+```{r setup, include=FALSE}
+library(readr, quietly = TRUE, warn.conflicts = FALSE)
+library(tidyverse, quietly = TRUE, warn.conflicts = FALSE)
+library(dplyr, quietly = TRUE, warn.conflicts = FALSE)
+library(glmnet, quietly = TRUE, warn.conflicts = FALSE)
+library(tidyr, quietly = TRUE, warn.conflicts = FALSE)
+library(ggplot2, quietly = TRUE, warn.conflicts = FALSE)
+library(knitr, quietly = TRUE, warn.conflicts = FALSE)
+
+# Set default chunk options
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+```{r data_wrangling, include=FALSE}
+tryCatch({
+  Quarterback <- read_csv("Data/Game_Logs_Quarterback.csv")
+}, error = function(e) {
+  stop("Error reading the CSV file. Make sure 'Data/Game_Logs_Quarterback.csv' exists relative to your R Markdown file.")
+})
+
+
+# Data Wrangling
+Quarterback$Position <- "QB" 
+
+for (i in 12:ncol(Quarterback)){
+  Quarterback[[i]] <- suppressWarnings(as.numeric(Quarterback[[i]])) 
+  Quarterback[[i]][is.na(Quarterback[[i]])] <- 0
+}
+
+Starter <- Quarterback[Quarterback$`Games Started` == "1",]
+
+Starter %>%
+  group_by(Name) %>%
+  summarise(
+    `Games Started` = sum(`Games Started`),
+    Wins = sum(Outcome == "W"),
+    Losses = sum(Outcome == "L"),
+    `Completion Percentage` = mean(`Completion Percentage`, na.rm = TRUE), # Use na.rm just in case
+    PassingYards = mean(`Passing Yards`, na.rm = TRUE),
+    `Rushing Yards` = mean(`Rushing Yards`, na.rm = TRUE),
+    PasserRating = mean(`Passer Rating`, na.rm = TRUE),
+    `TD Passes` = mean(`TD Passes`, na.rm = TRUE),
+    `Rushing TDs` = mean(`Rushing TDs`, na.rm = TRUE),
+    Ints = mean(Ints, na.rm = TRUE),
+    Sacks = mean(Sacks, na.rm = TRUE),
+    Fumbles = mean(Fumbles, na.rm = TRUE),
+    .groups = 'drop' 
+    ) -> new_df
+
+new_df$Win_Percentage <- ifelse(new_df$`Games Started` > 0, new_df$Wins / new_df$`Games Started`, 0)
+
+predictor_cols <- c('Completion Percentage', 'PassingYards', 'Rushing Yards', 'PasserRating', 'TD Passes', 'Rushing TDs', 'Ints', 'Sacks', 'Fumbles')
+new_df <- new_df[complete.cases(new_df[, c(predictor_cols, "Win_Percentage")]), ]
+```
+
+\newpage
+
+# Abstract
+
+This report investigates the relationship between various quarterback performance statistics and their associated win percentage in the NFL. Using game log data for starting quarterbacks, we analyze key metrics such as passing yards, rushing yards, passer rating, touchdowns, interceptions, sacks, and fumbles. Exploratory data analysis reveals distinct distributions for different stats and highlights a positive correlation between metrics like Passer Rating and TD Passes with Win Percentage, while Interceptions and Fumbles show a negative correlation. To quantify these relationships, we developed two predictive models: Lasso (Least Absolute Shrinkage and Selection Operator) regression and Stepwise linear regression. Both models identified Passer Rating, TD Passes, Interceptions, and Fumbles as significant predictors of win percentage. The models achieved comparable performance on test data, explaining approximately 37-38% (\( R^2 \approx 0.37 \)) of the variance in win percentage. These findings suggest that while many factors contribute to winning, certain career statistics are significant drivers of success for starting quarterbacks. This analysis provides insights for player evaluation and understanding the components of effective quarterback play.
+
+\newpage
+
+# Introduction
+
+The quarterback is often considered the most critical position in American football, directly influencing the outcome of games. Understanding which statistical measures best capture a quarterback's contribution to winning is a central question in sports analytics. This report aims to explore this question using publicly available NFL data.
+
+*   **Data Source:** The data originates from the "NFL Statistics" dataset available on Kaggle(https://www.kaggle.com/datasets/kendallgillies/nflstatistics/data), compiled by Kendall Gillies [1]. It contains detailed game logs for various positions, including quarterbacks, spanning multiple seasons.
+*   **Data Scope:** The initial dataset includes game-by-game statistics. For this analysis, we focused specifically on quarterbacks who were designated as the starter for a given game. The post cleaned dataset (`new_df`) contains `r nrow(new_df)` unique starting quarterbacks, summarizing their average per-game performance across `r length(predictor_cols)` key statistical features, plus win/loss records.
+*   **Motivation & Goals:** We were interested in identifying which commonly tracked quarterback statistics have the strongest statistical link to winning games. Our primary goals are:
+    1.  To explore the distribution of key quarterback performance metrics.
+    2.  To visualize the relationship between these metrics and career win percentage.
+    3.  To build and compare statistical models to predict win percentage based on these metric to identify the most influential predictors.
+
+# Data Cleaning
+
+The data required several cleaning procedures to prepare it for analysis
+
+1.  **Loading Data:** The `Game_Logs_Quarterback.csv` file was loaded into R.
+2.  **Data Type Conversion:** Columns containing statistics were ensured to be in to numeric format.
+3.  **Zeroed Missing Values:** During numeric conversion, any non-numeric entries became `NA`. These `NA` values, along with pre-existing `NA`s in numeric columns, were changed to 0. This assumes that a missing value often corresponds to zero occurrences of that statistic in a game. 
+4.  **Filtered for Starters:** The dataset was filtered to include only rows where the quarterback had `Games Started` equal to 1, focusing the analysis on primary players for each game.
+5.  **Aggregation by Players:** The game-level data for starters was aggregated by player (`Name`). We calculated the total games started, total wins, and total losses. For performance statistics such `Passing Yards`, `Passer Rating`, `Ints`, we calculated the *mean* value across all started games to represent the quarterback's average per-game performance.
+6.  **Chose Specific Feature:** A `Win_Percentage` metric was calculated for each quarterback as `Wins / Games Started`.
+7.  **Final Check:** Rows with any remaining missing values in the predictor variables were removed to ensure compatibility with modeling algorithms.
+
+# Exploratory Data Analysis (EDA)
+
+Exploratory Data Analysis helps us understand the characteristics of our data and potential relationships before modeling.
+
+## Distribution of Key Statistics
+
+We examined the distributions of average Passing Yards, Rushing Yards, and Passer Rating per game across all starting quarterbacks in our dataset.
+
+```{r histogram, fig.cap="Histograms showing the distribution of average per-game Passing Yards, Rushing Yards, and Passer Rating for starting quarterbacks."}
+columns_to_plot <- c('PassingYards', 'Rushing Yards', 'PasserRating')
+
+ncol_hist <- 2  
+nrow_hist <- ceiling(length(columns_to_plot) / ncol_hist)
+par(mfrow = c(nrow_hist, ncol_hist), mar = c(4, 4, 2, 1)) # Adjusted margins
+
+for (col_name in columns_to_plot) {
+  hist(new_df[[col_name]], 
+       main = paste("Distribution of", col_name), 
+       xlab = col_name, 
+       ylab = "Frequency",
+       col = "lightblue", 
+       border = "black")
+}
+
+par(mfrow = c(1, 1), mar = c(5, 4, 4, 2) + 0.1) 
+```
+
+*   Average `PassingYards` per game appears roughly bell-shaped, centered around 200 yards, with a slight right skew.
+*   Average `Rushing Yards` per game is heavily right-skewed, with most quarterbacks averaging very few rushing yards, but a tail of quarterbacks averaging significantly more.
+*   Average `PasserRating` seems approximately normally distributed, centered around a rating of 80.
+
+## Relationship between Wins and Passing Yards
+
+To explore how performance relates to overall success, we grouped quarterbacks by their total career wins and examined their average passing yards per game.
+
+```{r box_plot, fig.cap="Box plot showing the distribution of average Passing Yards per game, grouped by total career wins."}
+
+new_df$WinsGroup <- cut(new_df$Wins,
+                        breaks = 5,
+                        labels = c("0–45", "46–90", "91–136", "137–181", "182–226"))
+
+# Plot bar chart
+ggplot(new_df, aes(x = WinsGroup, y = PassingYards)) +
+  geom_boxplot(fill = "lightblue") + 
+  labs(x = "Total Wins",
+       y = "Average Passing Yards (Per Game)",
+       title = "Average Passing Yards Grouped By Career Wins") +
+  theme_minimal()
+```
+
+The box plot suggests a positive trend where quarterbacks in groups with more career wins tend to have higher average passing yards per game. The variability in passing yards also appears to decrease slightly in the higher win groups.
+
+## Correlation with Win Percentage
+
+We calculated the Pearson correlation coefficient between each average per-game statistic and the quarterback's career win percentage to get a preliminary idea of linear relationships.
+
+```{r bar_chart, fig.cap="Bar chart showing the Pearson correlation coefficient between various QB stats and Win Percentage."}
+predictor_columns <- c('Completion Percentage', 'PassingYards', 'Rushing Yards', 'PasserRating', 'TD Passes', 'Rushing TDs', 'Ints', 'Sacks', 'Fumbles')
+correlation_results <- list()
+
+for (col_name in predictor_columns) {
+  if(col_name %in% names(new_df) && is.numeric(new_df[[col_name]])) {
+      correlation_value <- cor(new_df[[col_name]], new_df$Win_Percentage, use = "complete.obs")
+      correlation_results[[col_name]] <- correlation_value
+  }
+}
+
+correlations_vector <- unlist(correlation_results)
+
+sorted_correlations <- correlations_vector[order(-abs(correlations_vector))]
+
+par(mar = c(5, 8, 4, 2) + 0.1) 
+barplot(sorted_correlations, 
+        main = "How Strongly Each Stat Relates to Win Percentage", 
+        xlab = "Correlation Coefficient",
+        horiz = TRUE, 
+        las = 1, 
+        cex.names = 0.8, 
+        col = ifelse(sorted_correlations > 0, "lightblue", "salmon"), 
+        border = "black"
+       )
+
+abline(v = 0, col = "grey", lty = 2)
+
+par(mar = c(5, 4, 4, 2) + 0.1) 
+```
+
+*   **Strongest Positive Correlations:** `PasserRating` shows the highest positive correlation with `Win_Percentage`, followed by `TD Passes` and `PassingYards`.
+*   **Strongest Negative Correlations:** `Ints` (Interceptions) and `Fumbles` have the strongest negative correlations, indicating that turnovers are strongly associated with lower win percentages. `Sacks` also show a negative correlation.
+*   **Weaker Correlations:** `Rushing Yards` and `Rushing TDs` show weaker positive correlations compared to passing stats. `Completion Percentage` has a moderate positive correlation.
+
+# Analysis
+
+Based on the EDA, several statistics appear related to win percentage. We now build regression models to quantify these relationships simultaneously and identify the most important predictors while accounting for potential situatations where two or more independent variables in a model are highly correlated with each other.
+
+## Model Preparation
+
+We split the data into training (70%) and testing (30%) sets to evaluate model performance on unseen data. `Win_Percentage` is the target variable (y), and the average per-game statistics are the predictors (x).
+
+```{r model_prep, include=FALSE}
+y <- new_df$Win_Percentage
+x <- data.matrix(new_df[, predictor_cols]) 
+
+set.seed(123) 
+train_indices <- sample(1:nrow(x), 0.7 * nrow(x)) 
+
+x_train <- x[train_indices, ]
+x_test <- x[-train_indices, ]
+y_train <- y[train_indices]
+y_test <- y[-train_indices]
+```
+
+## Lasso Regression
+
+Lasso regression performs linear regression but adds a penalty (\( L_1 \) norm) to the coefficient magnitudes, which can shrink some coefficients exactly to zero, effectively performing feature selection. We use cross-validation to find the optimal penalty strength with lambda.
+
+```{r lasso_model, include=FALSE}
+cv_model <- cv.glmnet(x_train, y_train, alpha = 1, nfolds = 10) 
+
+best_lambda <- cv_model$lambda.min
+
+best_model <- glmnet(x_train, y_train, alpha = 1, lambda = best_lambda)
+
+y_pred_lasso_test <- predict(best_model, s = best_lambda, newx = x_test)
+
+sst_lasso_test <- sum((y_test - mean(y_test))^2)
+sse_lasso_test <- sum((y_pred_lasso_test - y_test)^2)
+rsq_lasso_test <- 1 - sse_lasso_test / sst_lasso_test
+
+y_pred_lasso_train <- predict(best_model, s = best_lambda, newx = x_train)
+
+sst_lasso_train <- sum((y_train - mean(y_train))^2)
+sse_lasso_train <- sum((y_pred_lasso_train - y_train)^2)
+rsq_lasso_train <- 1 - sse_lasso_train / sst_lasso_train
+```
+
+```{r lasso_coef_table, results='asis'}
+lasso_coeffs_matrix <- coef(best_model, s = best_lambda)
+lasso_coeffs_df <- data.frame(
+  Feature = rownames(lasso_coeffs_matrix),
+  Coefficient = as.numeric(lasso_coeffs_matrix)
+)
+
+kable(lasso_coeffs_df, caption = "Lasso Model Coefficients (Optimal Lambda)", digits = 4, row.names = FALSE)
+```
+
+The Lasso model selected several predictors, shrinking the coefficients of `Completion Percentage` and `Rushing TDs` to zero, suggesting they offer less  predictive value when other variables are present. Key predictors include `PasserRating`, `TD Passes`, `Ints`, `Fumbles`, `PassingYards`, `Rushing Yards`, and `Sacks`.
+
+```{r lasso_graph, fig.cap="Lasso coefficient paths as a function of the log of the penalty parameter (lambda). Labels indicate when variables enter the model."}
+lasso_train_model <- glmnet(x_train, y_train, alpha = 1)
+
+par(mar = c(5, 4, 6, 2))
+
+plot(
+  lasso_train_model,
+  xvar = "lambda",
+  label = TRUE,
+  xlab = "Log Lambda",
+  ylab = "Coefficient Value",
+  main = "Lasso: How QB Stat Coefficients Change with Regularization"
+)
+
+predictor_names_plot <- colnames(x_train)
+num_predictors_plot <- length(predictor_names_plot)
+plot_colors <-
+  RColorBrewer::brewer.pal(min(num_predictors_plot, 9), "Set1")
+if (num_predictors_plot > 9) {
+  plot_colors <- rainbow(num_predictors_plot)
+}
+
+legend(
+  "bottomright",
+  legend = predictor_names_plot,
+  col = plot_colors[1:num_predictors_plot],
+  lty = 1,
+  cex = 0.6
+)
+par(mar = c(5, 4, 4, 2) + 0.1)
+```
+
+The Lasso path plot visualizes how coefficients are penalized as lambda increases. Variables that remain non-zero for longer where they are further right are generally considered stronger predictors. `PasserRating`, `Ints`, and `Fumbles` appear particularly influential.
+
+\newpage
+
+## Stepwise Regression
+
+Stepwise regression automatically selects variables for a linear model by iteratively adding or removing predictors. We use a bidirectional approach, considering both adding and removing variables.
+
+```{r stepwise_model, include=FALSE}
+train_data <- data.frame(Win_Percentage = y_train, x_train)
+test_data <- data.frame(Win_Percentage = y_test, x_test)
+
+full_model <- lm(Win_Percentage ~ ., data = train_data)
+
+
+stepwise_model <- suppressWarnings(step(full_model, direction = "both", trace = 0)) 
+
+y_pred_stepwise_test <- predict(stepwise_model, newdata = test_data)
+
+sst_stepwise_test <- sum((y_test - mean(y_test))^2)
+sse_stepwise_test <- sum((y_pred_stepwise_test - y_test)^2)
+rsq_stepwise_test <- 1 - sse_stepwise_test / sst_stepwise_test
+
+y_pred_stepwise_train <- predict(stepwise_model, newdata = train_data)
+
+sst_stepwise_train <- sum((y_train - mean(y_train))^2)
+sse_stepwise_train <- sum((y_pred_stepwise_train - y_train)^2)
+rsq_stepwise_train <- 1 - sse_stepwise_train / sst_stepwise_train
+```
+
+```{r stepwise_summary_table, results='asis'}
+stepwise_summary_coeffs <- summary(stepwise_model)$coefficients
+
+stepwise_summary_df <- data.frame(
+    Feature = rownames(stepwise_summary_coeffs),
+    Estimate = stepwise_summary_coeffs[, "Estimate"],
+    `Std. Error` = stepwise_summary_coeffs[, "Std. Error"],
+    `t value` = stepwise_summary_coeffs[, "t value"],
+    `Pr(>|t|)` = stepwise_summary_coeffs[, "Pr(>|t|)"]
+)
+
+kable(stepwise_summary_df, caption = "Stepwise Regression Final Model Summary", digits = 4, row.names = FALSE)
+```
+
+The final Stepwise model selected `PassingYards`, `Rushing Yards`, `Ints`, `Sacks`, and `Fumbles` as significant predictors. Looking at it closley we see it excluded `PasserRating` and `TD Passes`, likely due to their high correlation with other  variables like `PassingYards` and `Ints`. The coefficients align with expectations where it is positive for yards and negative for turnovers.
+
+# Results
+
+## Model Performance Comparison
+
+We compare the performance of the Lasso and Stepwise models using the \( R^2 \) (coefficient of determination) value on both the training and testing datasets. \( R^2 \) represents the proportion of the variance in the dependent variable (Win Percentage) that is predictable from the independent variables (QB stats).
+
+```{r rsquared_comparison_table, results='asis'}
+rsq_comparison_data <- data.frame(
+  Model = c("Lasso", "Lasso", "Stepwise", "Stepwise"),
+  DataSet = c("Train", "Test", "Train", "Test"),
+  R_Squared = c(rsq_lasso_train, rsq_lasso_test, rsq_stepwise_train, rsq_stepwise_test)
+)
+
+kable(rsq_comparison_data, caption = "Model R-squared Comparison", digits = 4, col.names = c("Model", "Data Set", "R-squared"))
+```
+
+Both models show similar performance. The \( R^2 \) values on the training data are slightly higher than on the test data, which is expected. The test \( R^2 \) values of approximately 0.37 for Lasso and 0.38 for Stepwise indicate that the selected quarterback statistics explain about 37-38% of the variability in win percentage in this dataset on unseen data. While this shows a significant relationship, it also implies that over 60% of the variance is due to other factors not included in the model.
+
+## Key Predictors Summary
+
+Comparing the variables selected by both models and their coefficients
+
+* **Consistently Important (Negative Impact):** `Ints` and `Fumbles` were identified by both models as having a significant negative impact on win percentage. This strongly suggests that ball security is paramount. `Sacks` also showed a negative impact in both models.
+* **Consistently Important (Positive Impact):** `PassingYards` was significant and positive in both models. So making sure the quarterback has consistently connecting throws is important rather then focusing on touchdown throws or any other maybe more risky plays.
+* **Model Differences:**
+    + Lasso retained `PasserRating` and `TD Passes` (positive) and `Rushing Yards` (positive), while shrinking `Completion Percentage` and `Rushing TDs` to zero.
+    + Stepwise selected `Rushing Yards` (positive) but excluded `PasserRating` and `TD Passes`, likely due it conflicting with the other independent variables.
+
+Overall, the analysis points towards passer efficiency, touchdown generation, and avoiding turnovers/sacks as the most statistically important indicators of higher win percentages among starting quarterbacks in this dataset.
+
+# Discussion and Conclusion
+
+This analysis aimed to identify which quarterback statistics best predict win percentage using game log data for NFL starters. Through EDA and regression modeling, we found statistically significant relationships between several performance metrics and winning. The data consistently showed a strong positive correlation and was a key predictor in the Lasso model. Interceptions and Fumbles demonstrated strong negative correlations and were significant negative predictors in both models. TD Passes (Lasso) and Passing Yards (both models) were positively associated with winning. Both Lasso and Stepwise models explained a similar, moderate amount of variance (\( R^2 \approx 0.37-0.38 \) on test data), indicating that while QB stats are important, they are only part of the complex equation of winning NFL games.
+
+**Limitations**
+
+* **Omitted Variables:** The models do not account for many other factors influencing game outcomes, such as defensive performance, special teams play, opponent quality, coaching strategies, or game situation (such as the weather).
+* **NA Imputation:** Imputing missing stats with 0 is a simplification.
+* **Correlation vs. Causation:** While we identified statistical associations, these models do not prove causation. Good stats might lead to wins, or winning teams might enable quarterbacks to achieve better stats.
+* **Data Granularity:** Using per-game averages over a career removes any variation and doesn't capture situational performance.
+
+**Future Work**
+
+* Incorporate opponent adjustments such as strength of game scheduling or defensive rankings.
+* Include team-level variables such as defensive performances and offensive line performances.
+* Explore non-linear relationships between variables.
+* Analyze data on a play-by-play level for more granular insights.
+
+**In conclusion**, this analysis confirms the statistical importance of efficient, high-scoring, and secure quarterback play for achieving wins in the NFL. Coaches in the NFL will likely want to focus on making sure their Quarterback is strongly defended while ensuring they have good passing efficency to improve the win percentage of the team overall. But while individual stats don't tell the whole story, metrics related to passing efficiency, scoring TDs/gaining Yards, and avoiding mistakes such as Interceptions/Fumbles/Sacks are demonstrably linked to success.
+
+\newpage
+
+# Appendix: R Code
+
+R code used with packages such as `tidyverse`, `readr`, `dplyr`, `glmnet`, `ggplot2`, and `knitr`. Used AI to get help for certain abstract problems such as graph and model inspiration (Google Gemini 2.5, 2025 and ChatGPT Model 4o, 2025)
+
+# Acknowledgements
+
+1. Mark Brown - Power-point & Basic Graph
+2. Cooper Crow - Data Wrangling & Basic Graph & Report Writing
+3. Manas Reddy - Modeling & Basic Graph & Report Writing
+4. Elijah Robledo - Power-Point & Report Writing
+
+# Bibliography
+
+[1] Gillies, Kendall. "NFL Statistics". Kaggle, 2023. Accessed May 12, 2025. URL: <https://www.kaggle.com/datasets/kendallgillies/nflstatistics/data>
+
+[2] RDocumentation for kable. Accessed May 12, 2025. URL: <https://www.rdocumentation.org/packages/knitr/versions/1.48/topics/kable>
+
+[3] Geekforgeeks Article for Stepwise Regression in R, 2024. Accessed May 12, 2025. URL: <https://www.geeksforgeeks.org/stepwise-regression-in-r/>
+
+[4] Statology Article for Lasso Regression in R, Zach Bobbitt 2020. Accessed May 12, 2025. URL: <https://www.statology.org/lasso-regression-in-r/>
+
+[5] R-bloggers Article for the Pearson Correlation in R, 2021. Accessed May 12, 2025. URL: <https://www.r-bloggers.com/2021/10/pearson-correlation-in-r/>
+
+[6] Tidyverse Documentation for ggplot2. Accessed May 12, 2025. URL: <https://ggplot2.tidyverse.org/reference/>
